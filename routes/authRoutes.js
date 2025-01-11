@@ -91,57 +91,66 @@ const sendEmail = async (to, subject, body) => {
 
 // Admin Register Employee with Auto-Increment Employee ID
 router.post('/register-employee', protect, admin, upload.single('profilePic'), async (req, res) => {
-  const { name, email, password, mobile, category, address, aadhar, staffType, salary,role } = req.body;
-
-  // Ensure all required fields are provided
-  if (!name || !email || !password || !mobile || !category || !aadhar) {
-    return res.status(400).json({ message: 'Please provide name, email, password, mobile, category, and aadhar' });
-  }
-
-  // Validate mobile number to be exactly 10 digits
-  const mobileRegex = /^[0-9]{10}$/;
-  if (!mobileRegex.test(mobile)) {
-    return res.status(400).json({ message: 'Mobile number must be exactly 10 digits' });
-  }
-
-  // Validate name to contain only letters and spaces
-  const nameRegex = /^[A-Za-z\s]+$/;
-  if (!nameRegex.test(name)) {
-    return res.status(400).json({ message: 'Name must contain only letters and spaces' });
-  }
-
-  // Check if user already exists
-  const userExists = await User.findOne({ email, mobile });
-  if (userExists) {
-    return res.status(400).json({ message: 'User already exists' });
-  }
+  const { name, email, password, mobile, category, address, aadhar, staffType, salary, role } = req.body;
 
   try {
-    // Get the next available Employee ID
-    const employeeId = await getNextEmployeeId();
+    // Start performance timer
+    console.time('RegisterEmployee');
 
-    // Create new employee without hashing the password
-    const user = new User({
+    // Input validation
+    const mobileRegex = /^[0-9]{10}$/;
+    const nameRegex = /^[A-Za-z\s]+$/;
+
+    if (!name || !email || !password || !mobile || !category || !aadhar) {
+      return res.status(400).json({ message: 'Missing required fields' });
+    }
+    if (!mobileRegex.test(mobile)) {
+      return res.status(400).json({ message: 'Invalid mobile number format' });
+    }
+    if (!nameRegex.test(name)) {
+      return res.status(400).json({ message: 'Invalid name format' });
+    }
+
+    // Check if user exists
+    const userExists = await User.findOne({ $or: [{ email }, { mobile }] }).lean();
+    if (userExists) {
+      return res.status(400).json({ message: 'User already exists' });
+    }
+
+    console.timeLog('RegisterEmployee', 'Validation completed');
+
+    // Get next employee ID
+    const employeeId = await getNextEmployeeId();
+    console.timeLog('RegisterEmployee', 'Employee ID generated');
+
+    // Create new user data object
+    const userData = {
       employeeId,
       name,
       email,
-      password, // Storing plain password directly
-      role, // Hardcoded role as 'employee'
+      password, // Storing plain password (not recommended for production)
+      role,
       mobile,
       category,
       address,
       aadhar,
       staffType,
       salary,
-      profilePic: req.file ? req.file.path : null, // Save uploaded profile pic path
-    });
+      profilePic: req.file?.path || null, // Use uploaded path if available
+    };
 
-    // Save new employee to the database
-    await user.save();
-
-    // Send email with Employee ID and plain password
+    // Save user to database and send email in parallel
     const emailBody = `Dear ${name},\n\nYour employee account has been created successfully.\n\nEmployee ID: ${employeeId}\nPassword: ${password}\n\nPlease log in to the employee portal to get started.\n\nRegards,\nYour Company`;
-    await sendEmail(email, 'Welcome to the Team!', emailBody);
+    const emailPromise = sendEmail(email, 'Welcome to the Team!', emailBody);
+
+    // Save user to database
+    const saveUserPromise = User.create(userData);
+
+    // Execute both promises concurrently
+    await Promise.all([emailPromise, saveUserPromise]);
+
+    console.timeLog('RegisterEmployee', 'User saved and email sent');
+    console.timeEnd('RegisterEmployee');
 
     res.status(201).json({ message: 'Employee registered successfully and email sent.' });
   } catch (error) {
@@ -230,19 +239,28 @@ router.post('/verify-otp', async (req, res) => {
 // Profile route
 router.get('/profile', protect, async (req, res) => {
   try {
-    const user = await User.findById(req.user.id).select('-password');
+    // Using lean() to get plain objects without Mongoose document overhead
+    const user = await User.findById(req.user.id)
+      .select('employeeId name category profilePic staffType email mobile address weekoffSchedule')
+      .lean();
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
     res.json({
       employeeId: user.employeeId || '',
       name: user.name || '',
       category: user.category || '',
-      profilePic: user.profilePic || '', // Default to an empty string
+      profilePic: user.profilePic || '',  // Default to an empty string
       staffType: user.staffType || '',
       email: user.email || '',
       mobile: user.mobile || '',
       address: user.address || '',
-      weekoffSchedule :user.weekoffSchedule || '',
+      weekoffSchedule: user.weekoffSchedule || '',
     });
   } catch (error) {
+    console.error('Error fetching user profile:', error);
     res.status(500).json({ message: 'Error retrieving profile', error });
   }
 });
@@ -274,11 +292,10 @@ router.get('/employees/:employeeId', protect, async (req, res) => {
 
 
 
-router.put('/employees/:id', protect, admin, async (req, res) => {
+router.put('/employees/:id', protect, admin, upload.single('profilePic'), async (req, res) => {
   try {
     const employeeId = req.params.id;
-    
-    // Check if the employeeId is a valid ObjectId
+
     if (!mongoose.Types.ObjectId.isValid(employeeId)) {
       return res.status(400).json({ message: 'Invalid employee ID' });
     }
@@ -293,13 +310,16 @@ router.put('/employees/:id', protect, admin, async (req, res) => {
       name: req.body.name,
       email: req.body.email,
       mobile: req.body.mobile,
-      password : req.body.password,
+      password: req.body.password,
       category: req.body.category,
       staffType: req.body.staffType,
       address: req.body.address,
       aadhar: req.body.aadhar,
       salary: req.body.salary,
+      profilePic: req.file?.path || null,
     };
+
+    
 
     Object.assign(employee, updatedData); // Update employee fields
     await employee.save();

@@ -15,6 +15,8 @@ const rateLimit = require('express-rate-limit');
 const cluster = require('cluster');
 const os = require('os');
 const redis = require('redis'); // Redis for caching
+const http = require('http');
+const socketIo = require('socket.io');
 
 // Load environment variables from .env file
 dotenv.config();
@@ -28,14 +30,20 @@ const client = redis.createClient();
 // Initialize Express app
 const app = express();
 
+// Create an HTTP server with the Express app (needed for Socket.IO)
+const server = http.createServer(app);
+
+// Set up Socket.IO
+const io = socketIo(server);  // Attach Socket.IO to the server
+
 // Middleware to parse incoming JSON data
 app.use(express.json());
-app.use(fileUpload({
-  limits: { fileSize: 10 * 1024 * 1024 },  // 10MB limit
-  abortOnLimit: true,
-  useTempFiles: true,
-  tempFileDir: '/tmp/'
-}));
+// app.use(fileUpload({
+//   limits: { fileSize: 10 * 1024 * 1024 },  // 10MB limit
+//   abortOnLimit: true,
+//   useTempFiles: true,
+//   tempFileDir: '/tmp/'
+// }));
 
 // Enable Cross-Origin Resource Sharing (CORS)
 app.use(cors({ origin: '*' }));
@@ -50,7 +58,6 @@ const limiter = rateLimit({
   message: 'Too many requests, please try again later.'
 });
 app.use(limiter);
-
 // Set up the authentication API routes
 app.use('/api/auth', userRoutes);
 app.use('/api', markAttendances);
@@ -63,7 +70,7 @@ app.use('/api', salaryRoutes);
 
 // Timeout handler
 app.use((req, res, next) => {
-  res.setTimeout(500000, () => { // Set timeout to 500 seconds (example)
+  res.setTimeout(5000000, () => { // Set timeout to 500 seconds (example)
     console.log('Request timed out');
     res.status(408).send('Request Timeout');
   });
@@ -94,7 +101,23 @@ if (cluster.isMaster) {
 } else {
   // Server setup for each worker process
   const PORT = process.env.PORT || 5000;
-  app.listen(PORT, () => {
+  
+  // Socket.IO communication
+  io.on('connection', (socket) => {
+    console.log('A user connected');
+    
+    // Example event handling
+    socket.on('message', (msg) => {
+      console.log('Message from client:', msg);
+      io.emit('message', `Server says: ${msg}`);
+    });
+
+    socket.on('disconnect', () => {
+      console.log('User disconnected');
+    });
+  });
+
+  server.listen(PORT, () => {
     console.log(`Worker ${process.pid} started on port ${PORT}`);
   });
 }

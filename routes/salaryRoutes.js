@@ -138,6 +138,44 @@ const calculateHourlySalary = (dailySalary, workingHours) => {
   }
   return dailySalary / workingHours;
 };
+router.get('/salary/employees', async (req, res) => {
+  const { endDate } = req.query;
+
+  if (!endDate) {
+    return res.status(400).json({ error: 'End date is required' });
+  }
+
+  try {
+    const parsedEndDate = new Date(endDate);
+    if (isNaN(parsedEndDate)) {
+      return res.status(400).json({ error: 'Invalid end date format' });
+    }
+
+    const employees = await User.find({});
+    const employeesWithEndDate = employees.map((employee) => {
+      const creationDate = new Date(employee.createdAt);
+      const endDateForEmployee = new Date(
+        parsedEndDate.getFullYear(),
+        parsedEndDate.getMonth(),
+        creationDate.getDate()
+      );
+
+      return {
+        employeeId: employee.employeeId,
+        name: employee.name,
+        profilePic: employee.profilePic || '',
+        endDate: endDateForEmployee.toISOString().split('T')[0],
+        createdAt: employee.createdAt,
+        salary: parseFloat(employee.salary), // Ensure salary is a number
+      };
+    });
+
+    return res.status(200).json(employeesWithEndDate);
+  } catch (error) {
+    console.error('Error fetching employees:', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
 
 router.get('/employees', async (req, res) => {
   const { endDate } = req.query;
@@ -183,6 +221,8 @@ router.get('/employees', async (req, res) => {
           profilePic: employee.profilePic || '',
           endDate: endDateForEmployee.toISOString().split('T')[0], // Format date
           createdAt: employee.createdAt,
+          salary:employee.salary,
+          shiftTime:employee.shiftTime,
         });
       }
     }

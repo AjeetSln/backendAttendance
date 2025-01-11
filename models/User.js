@@ -15,10 +15,20 @@ const userSchema = mongoose.Schema(
     aadhar: { type: String, required: true, unique: true },
     profilePic: { type: String, required: true },
     weekoffSchedule: { type: [String], default: [] }, // List of weekoff days
-    shiftTime: {
-      start: { type: String }, // E.g., "09:00 AM"
-      end: { type: String }, // E.g., "05:00 PM"
+    
+    officeLocation: {
+    officename: { type: String,  },
+    latitude: {
+      type: Number,
+      
     },
+    longitude: {
+      type: Number,
+      
+    },
+    radius: {
+      type: Number,
+    }, },
   },
   { timestamps: true }
 );

@@ -15,7 +15,7 @@ const connectDB = async () => {
     const attendanceCollection = mongoose.connection.collection('attendances');
 
     // Drop the old index if it exists
-    await attendanceCollection.dropIndex("date_1_shiftId_1", (err, result) => {
+    await attendanceCollection.dropIndex("date_1_employeeId_1", (err, result) => {
       if (err && err.code !== 27) {  // Ignore error if the index doesn't exist
         console.error('Error dropping index:', err);
       } else {
@@ -24,7 +24,7 @@ const connectDB = async () => {
     });
 
     // Create the new unique index on `date` and `employeeId`
-    await attendanceCollection.createIndex({ date: 1, employeeId: 1 }, { unique: true });
+    await attendanceCollection.createIndex({ date: 1, employeeId: 1,shiftId: 1 }, { unique: true });
     console.log('New index created on date and employeeId.');
 
   } catch (error) {

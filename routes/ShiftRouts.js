@@ -3,7 +3,7 @@ const router = express.Router();
 const Shift = require('../models/Shift');
 const ShiftAssignment = require('../models/ShiftAssignment');
 const User = require('../models/User');
-
+const cron = require('node-cron');
 // Route to add a shift
 router.post('/register-Shift', async (req, res) => {
   try {
@@ -35,61 +35,92 @@ router.get('/all-shifts', async (req, res) => {
 });
 router.post('/assign-shift', async (req, res) => {
   try {
-    const { employeeId, shiftId, fromDate, toDate, shiftName, description } = req.body;
+    const { employeeId, shiftId, shiftName,shiftStart,shiftEnd, fromDate, toDate } = req.body;
+
+    // Validate the required fields
+    if (!employeeId || !shiftId || !shiftName || !fromDate || !toDate) {
+      return res.status(400).json({ message: 'All fields are required' });
+    }
+
+    // Fetch the user and shift using await
     const user = await User.findOne({ employeeId });
+    const shift = await Shift.findOne({ _id: shiftId });
+
     if (!user) {
       return res.status(404).json({ message: 'Employee not found' });
     }
-    const shift = await Shift.findOne({ _id: shiftId });
     if (!shift) {
       return res.status(404).json({ message: 'Shift not found' });
-    }
-
-    // Validate input
-    if (!employeeId || !shiftId || !fromDate || !toDate || !shiftName) {
-      return res.status(400).json({ message: 'Employee ID, Shift ID, shiftName, fromDate, and toDate are required' });
     }
 
     const from = new Date(fromDate);
     const to = new Date(toDate);
 
-    // Ensure valid date range
+    // Ensure "toDate" is after "fromDate"
     if (to < from) {
-      return res.status(400).json({ message: '"toDate" must be greater than or equal to "fromDate"' });
+      return res.status(400).json({ message: 'To date must be after From date' });
     }
 
-    // Check for overlap
+    // Check for overlapping shifts of the same shiftId or shiftName
     const overlappingAssignment = await ShiftAssignment.findOne({
       employeeId,
-      shiftId,
-      $or: [{ fromDate: { $lte: to }, toDate: { $gte: from } }],
+      $and: [
+        {
+          $or: [
+            { shiftId: shiftId }, // Same shift ID
+            { shiftName: shiftName }, // Same shift name
+          ],
+        },
+        {
+          $or: [
+            { fromDate: { $lte: to }, toDate: { $gte: from } }, // Overlapping date range
+          ],
+        },
+      ],
     });
 
+    // If there's an overlap, return an error
     if (overlappingAssignment) {
-      return res.status(400).json({ message: 'Shift assignment overlaps with an existing shift for this employee' });
+      return res
+        .status(400)
+        .json({ message: 'Shift overlaps with an existing assignment of the same type' });
     }
+
+    // Update the user's shiftTime
     user.shiftTime = {
-      start: shift.shiftStart, // set start time from shift
-      end: shift.shiftEnd, // set end time from shift
+      shiftName: shift.shiftName,
+      shiftStart: shift.shiftStart,
+      shiftEnd: shift.shiftEnd,
     };
     await user.save();
-    // Save shift assignment
+
+    // Create and save the shift assignment
     const assignment = new ShiftAssignment({
       employeeId,
       shiftId,
-      shiftName, // Include shiftName in the stored data
+      shiftName,
+      shiftStart,
+      shiftEnd,
       fromDate: from,
       toDate: to,
-      description,
     });
 
     await assignment.save();
-
     res.status(201).json({ message: 'Shift assigned successfully', assignment });
   } catch (error) {
-    res.status(500).json({ message: 'Failed to assign shift', error: error.message });
+    res.status(500).json({ message: error.message });
   }
 });
+cron.schedule('* * * * *', async () => {
+  try {
+    const now = new Date();
+    const result = await ShiftAssignment.deleteMany({ toDate: { $lt: now } });
+    console.log(`${result.deletedCount} expired shifts deleted`);
+  } catch (error) {
+    console.error('Error deleting expired shifts:', error);
+  }
+});
+
 // GET route to fetch all shift assignments
 router.get('/shift-assignments', async (req, res) => {
   try {
@@ -103,23 +134,33 @@ router.get('/shift-assignments', async (req, res) => {
 router.get('/employee-shift/:employeeId', async (req, res) => {
   try {
     const employeeId = req.params.employeeId;
-    const shiftAssignments = await ShiftAssignment.find({ employeeId }).populate('shiftId');
 
+    // Find all shift assignments for the employee
+    const shiftAssignments = await ShiftAssignment.find({ employeeId });
+
+    // If no shifts are found, return 404
     if (!shiftAssignments.length) {
       return res.status(404).json({ message: 'No shifts found for this employee' });
     }
 
+    // Map the shift assignments into a more user-friendly structure
     const shifts = shiftAssignments.map((assignment) => ({
-      shiftName: assignment.shiftId.shiftName,
-      shiftStart: assignment.fromDate,
-      shiftEnd: assignment.toDate,
+      shiftName: assignment.shiftName,
+      shiftId:assignment.shiftId,
+      shiftStart: assignment.shiftStart,
+      shiftEnd: assignment.shiftEnd,
+      assignedDate: assignment.assignedDate,
+      description: assignment.description || 'No description provided', // Default description if none is provided
     }));
 
+    // Respond with the formatted shift data
     res.json(shifts);
   } catch (error) {
+    console.error('Error retrieving employee shifts:', error);
     res.status(500).json({ message: 'Error retrieving employee shifts', error: error.message });
   }
 });
+
 
 
 module.exports = router;

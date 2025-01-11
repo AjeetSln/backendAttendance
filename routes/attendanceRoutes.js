@@ -5,9 +5,9 @@ const faceapi = require('face-api.js');
 const path = require('path')
 const canvas = require('canvas');
 const User = require('../models/User');
-
+const ShiftAssignment = require('../models/ShiftAssignment')
 const OfficeLocation = require('../models/officeLoc');
-const ShiftAssignment = require ('../models/ShiftAssignment')
+const AssignedOffice = require('../models/AssignedOffice')
 const { protect, admin } = require('../Middleware/authMiddleware');
 const cron = require('node-cron');
 const { Canvas, Image, ImageData } = canvas;
@@ -112,217 +112,320 @@ function calculateDistance(lat1, lon1, lat2, lon2) {
 
   return R * c; // Distance in meters
 }
+const formatTime = (milliseconds) => {
+  const hours = Math.floor(milliseconds / (1000 * 60 * 60));
+  const minutes = Math.floor((milliseconds % (1000 * 60 * 60)) / (1000 * 60));
+  const seconds = Math.floor((milliseconds % (1000 * 60)) / 1000);
+
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+};
+
 
 // GET: Fetch office location
-router.get('/officeLocation', protect,async (req, res) => {
-  try {
-    const officeLocation = await OfficeLocation.findOne(); // Find the first document
-    if (!officeLocation) {
-      return res.status(404).json({ error: 'Office location not found' });
-    }
-    res.json(officeLocation);
-  } catch (error) {
-    console.error('Error fetching office location:', error);
-    res.status(500).json({ error: 'Failed to fetch office location' });
-  }
-});
+router.post('/officeLocations', async (req, res) => {
+  const { name, latitude, longitude, radius } = req.body; // Destructure 'name'
 
-
-// POST: Update office location
-router.post('/officeLocation', protect,async (req, res) => {
-  const { latitude, longitude } = req.body; // Remove 'radius' from the request body
-
-  if (!latitude || !longitude) {
-    return res.status(400).json({ error: 'Latitude and longitude are required' });
+  if (!name || !latitude || !longitude || !radius) {
+    return res.status(400).json({ error: 'Name, latitude, longitude, and radius are required' });
   }
 
   try {
-    const RADIUS = 1000; // Fixed radius in meters
-    let officeLocation = await OfficeLocation.findOne(); // Check if the office location exists
+    // Create a new office location with the name
+    const officeLocation = new OfficeLocation({ name, latitude, longitude, radius });
+    await officeLocation.save();
 
-    if (officeLocation) {
-      // If it exists, update it
-      officeLocation.latitude = latitude;
-      officeLocation.longitude = longitude;
-      officeLocation.radius = RADIUS; // Set radius to 1km
-      await officeLocation.save();
-      return res.status(200).json({ 
-        message: 'Office location updated successfully', 
-        officeLocation 
-      });
-    } else {
-      // If it doesn't exist, create a new office location document
-      officeLocation = new OfficeLocation({ 
-        latitude, 
-        longitude, 
-        radius: RADIUS 
-      });
-      await officeLocation.save();
-      return res.status(201).json({ 
-        message: 'Office location created successfully', 
-        officeLocation 
-      });
-    }
+    res.status(201).json({
+      message: 'Office location added successfully',
+      officeLocation,
+    });
   } catch (error) {
-    console.error('Error updating office location:', error);
-    res.status(500).json({ error: 'Failed to update office location' });
+    console.error('Error adding office location:', error);
+    res.status(500).json({ error: 'Failed to add office location' });
   }
 });
+
+router.post('/assign-office', async (req, res) => {
+  const { employeeId, officeId, officeName } = req.body;
+
+  if (!employeeId || !officeId || !officeName) {
+    return res.status(400).json({ message: 'Employee ID, office ID, and officeName are required' });
+  }
+
+  console.log(`Assigning office: ${officeName} to employee: ${employeeId} for office ID: ${officeId}`);
+
+  try {
+    // Check if employee exists
+    const employee = await User.findOne({ employeeId });
+    if (!employee) {
+      console.error(`Employee with ID ${employeeId} not found`);
+      return res.status(404).json({ message: `Employee with ID ${employeeId} not found` });
+    }
+
+    // Check if office exists
+    const office = await OfficeLocation.findById(officeId);
+    if (!office) {
+      console.error(`Office with ID ${officeId} not found`);
+      return res.status(404).json({ message: `Office with ID ${officeId} not found` });
+    }
+
+    // Assign office to employee
+    employee.officeLocation = {
+      officename: office.name,
+      latitude: office.latitude,
+      longitude: office.longitude,
+      radius: office.radius,
+    };// Simplified assignment for now
+    await employee.save();
+    console.log(`Office assigned to employee: ${employeeId}`);
+
+    // Create an entry in AssignedOffice collection
+    const assignment = new AssignedOffice({
+      employeeId,
+      officeId,
+      officeName,
+    });
+    await assignment.save();
+    console.log(`Assignment created for employee: ${employeeId}`);
+
+    res.status(201).json({ message: 'Office assigned successfully', assignment });
+  } catch (error) {
+    console.error('Error assigning office:', error);
+    res.status(500).json({ message: 'Failed to assign office', error: error.message });
+  }
+});
+
+// Get all office locations
+router.get('/officeLocations', async (req, res) => {
+  try {
+    const officeLocations = await OfficeLocation.find();
+    res.status(200).json(officeLocations);
+  } catch (error) {
+    console.error('Error fetching office locations:', error);
+    res.status(500).json({ error: 'Failed to fetch office locations' });
+  }
+});
+
 router.post('/markAttendance', async (req, res) => {
-  let { employeeId, location, timestamp, type ,staffType} = req.body;
+  let { employeeId, location, timestamp, type, shiftName,shiftId } = req.body;
 
   console.log('Request Body:', req.body);
 
   // Validate location data
-  if (
-    !location ||
-    typeof location.latitude !== 'number' ||
-    typeof location.longitude !== 'number'
-  ) {
-    console.error('Invalid or missing location data:', location);
+  if (!location || typeof location.latitude !== 'number' || typeof location.longitude !== 'number') {
     return res.status(400).json({ error: 'Invalid or missing location data' });
   }
 
   try {
-    // Fetch office location
-    const officeLocation = await OfficeLocation.findOne();
-    if (!officeLocation) {
-      console.error('Office location not found');
-      return res.status(404).json({ error: 'Office location not found' });
-    }
-
-    // Fetch employee details
+    // Fetch the user (employee) details
     const user = await User.findOne({ employeeId });
     if (!user) {
-      console.error('User not found for employeeId:', employeeId);
       return res.status(404).json({ error: 'User not found' });
     }
-    staffType = user.staffType;
-    // Get the current date
+
+    // Fetch all shifts for the employee based on employeeId
+    const shifts = await ShiftAssignment.find({ employeeId });
+
+    if (!shifts.length) {
+      return res.status(404).json({ error: 'No shifts assigned to this employee.' });
+    }
+
     const now = new Date(timestamp);
+
+    // Validate the shift based on shiftName and time
+    const validShift = shifts.find((shift) => {
+      const shiftStartTime = new Date(`${now.toDateString()} ${shift.shiftStart}`);
+      const shiftEndTime = new Date(`${now.toDateString()} ${shift.shiftEnd}`);
+      return shift.shiftName === shiftName && now >= shiftStartTime && now <= shiftEndTime;
+    });
+
+    if (!validShift) {
+      return res.status(404).json({ error: 'No valid shift found for the provided shift name and current time.' });
+    }
+
     const currentDate = now.toDateString();
-    console.log('Current Date:', currentDate);
-
-    // Check for weekoff
-    const dayOfWeek = now.toLocaleString('en-US', { weekday: 'long' });
-    if (user.weekoffSchedule.includes(dayOfWeek)) {
-      console.log(`Today (${dayOfWeek}) is a weekoff for employeeId: ${employeeId}`);
-
-      // Check if weekoff attendance is already marked
-      let attendance = await Attendance.findOne({ employeeId, date: currentDate });
-      if (!attendance) {
-        attendance = new Attendance({
-          employeeId,
-          name: user.name,
-          date: currentDate,
-          shiftName: 'N/A',
-          location: 'Weekoff',
-          checkInTime: '0', // Set check-in time to 0
-          checkOutTime: '0', // Set check-out time to 0
-          status: 'Weekoff',
-          hoursWorked: 0,
-          overtimeHours: 0,
-          underTimeHours: 0,
-        });
-
-        await attendance.save();
-        console.log('Weekoff attendance marked successfully:', attendance);
-        return res.json({ message: 'Weekoff attendance marked.', attendance });
-      }
-
-      console.error('Weekoff attendance already marked for today');
-      return res.status(400).json({ error: 'Weekoff attendance already marked for today.' });
-    }
-
-    // Reverse geocoding for address
-    const axios = require('axios');
-    const nominatimUrl = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${location.latitude}&lon=${location.longitude}`;
-    let address = 'Unknown Location';
-
-    try {
-      const response = await axios.get(nominatimUrl);
-      address = response.data.display_name || 'Unknown Location';
-      console.log('Fetched Address:', address);
-    } catch (error) {
-      console.error('Error fetching address from Nominatim:', error.message);
-    }
-
-    // Geofence check for regular staff
-    const distance = calculateDistance(
-      location.latitude,
-      location.longitude,
-      officeLocation.latitude,
-      officeLocation.longitude
-    );
-    console.log('Distance from office:', distance, 'Radius:', officeLocation.radius);
-    if (distance > officeLocation.radius && staffType === 'regular') {
-      console.error('Outside authorized area for attendance');
-      return res.status(403).json({ error: 'You are outside the authorized area for attendance.' });
-    }
-
-    // Parse shift times
-    const shift = await User.findOne({ employeeId });
-    if (!shift) {
-      console.error('Shift assignment not found for employeeId:', employeeId);
-      return res.status(404).json({ error: 'Shift assignment not found for employee.' });
-    }
-
-    const shiftStartTime = new Date(`${currentDate} ${shift.shiftTime.start}`);
-    const shiftEndTime = new Date(`${currentDate} ${shift.shiftTime.end}`);
-    console.log('Shift Start Time:', shiftStartTime, 'Shift End Time:', shiftEndTime);
-
-    // Attendance operations: Check-In or Check-Out
-    let attendance = await Attendance.findOne({ employeeId, date: currentDate });
+    const shiftStartTime = new Date(`${currentDate} ${validShift.shiftStart}`);
+    const shiftEndTime = new Date(`${currentDate} ${validShift.shiftEnd}`);
 
     if (type === 'Check-In') {
-      if (attendance) {
-        console.error('Check-In already exists for this employee and date');
-        return res.status(400).json({ error: 'Check-In already marked for this employee on this date.' });
+      // Check if Check-In already exists for this shift
+      let attendance = await Attendance.findOne({ employeeId, date: currentDate, shiftId });
+      if (attendance && attendance.checkInTime) {
+        return res.status(400).json({ error: 'Check-In already marked for this shift.' });
       }
 
-      if (now < shiftStartTime || now > shiftEndTime) {
-        console.error('Check-In outside shift time');
-        return res.status(400).json({ error: 'Attendance can only be marked during shift time.' });
+      // Fetch location address
+      const nominatimUrl = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${location.latitude}&lon=${location.longitude}`;
+      let address = 'Unknown Location';
+
+      try {
+        const response = await axios.get(nominatimUrl);
+        address = response.data.display_name || 'Unknown Location';
+      } catch (error) {
+        console.error('Error fetching address:', error.message);
       }
-      
+
+      // Create attendance record
       attendance = new Attendance({
         employeeId,
         name: user.name,
         date: currentDate,
-        shiftName: shift.shiftName,
+        shiftName: validShift.shiftName,
+        shiftId,
         location: address,
-        staffType,
         checkInTime: now,
         status: 'Checked-In',
       });
 
       await attendance.save();
-      console.log('Check-In successful:', attendance);
       return res.json({ message: 'Check-In successful.', attendance });
     } else if (type === 'Check-Out') {
+      // Fetch attendance record
+      let attendance = await Attendance.findOne({ employeeId, date: currentDate, shiftId });
+      if (!attendance || !attendance.checkInTime) {
+        return res.status(400).json({ error: 'Check-In not found for this shift.' });
+      }
 
       const checkInTime = new Date(attendance.checkInTime);
-      const totalHoursWorked = (now - checkInTime) / (1000 * 60 * 60);
-      const shiftHours = shift.duration || 8;
-      const overtime = totalHoursWorked > shiftHours ? totalHoursWorked - shiftHours : 0;
-      const underTime = totalHoursWorked < shiftHours ? shiftHours - totalHoursWorked : 0;
+      const totalMillisecondsWorked = now - checkInTime; // Calculate total worked time in milliseconds
+      const formattedHoursWorked = formatTime(totalMillisecondsWorked); 
+      const shiftMilliseconds = shiftEndTime - shiftStartTime;
+      const overtime = totalMillisecondsWorked > shiftMilliseconds ? totalMillisecondsWorked - shiftMilliseconds : 0;
+      const underTime = totalMillisecondsWorked < shiftMilliseconds ? shiftMilliseconds - totalMillisecondsWorked : 0;
 
+      // Update attendance
       attendance.checkOutTime = now;
-      attendance.hoursWorked = totalHoursWorked;
-      attendance.overtimeHours = overtime;
-      attendance.underTimeHours = underTime;
-      attendance.status = totalHoursWorked >= shiftHours ? 'P' : 'U';
+      attendance.hoursWorked = formattedHoursWorked;
+      attendance.overtimeHours = formatTime(overtime * 1000 * 60 * 60); // Convert overtime to hh:mm:ss format
+      attendance.underTimeHours = formatTime(underTime * 1000 * 60 * 60);
+      attendance.status = formattedHoursWorked >= shiftMilliseconds ? 'P' : 'U';
 
       await attendance.save();
-      console.log('Check-Out successful:', attendance,staffType);
       return res.json({ message: 'Check-Out successful.', attendance });
     }
 
-    console.error('Invalid attendance type:', type);
     return res.status(400).json({ error: 'Invalid attendance type.' });
   } catch (error) {
     console.error('Error marking attendance:', error);
     res.status(500).json({ error: 'Error marking attendance' });
+  }
+});
+
+// Auto-checkout logic using a scheduler
+const autoCheckoutForShifts = async () => {
+  try {
+    const currentDate = new Date().toDateString(); // Get today's date
+    const shifts = await ShiftAssignment.find({}); // Fetch all shift assignments
+
+    for (const shift of shifts) {
+      const shiftEndTime = new Date(`${currentDate} ${shift.shiftEnd}`); // Parse shift end time
+      const shiftStartTime = new Date(`${currentDate} ${shift.shiftStart}`); // Parse shift start time
+
+      // Check if the current time is past the shift end time
+      if (new Date() >= shiftEndTime) {
+        const attendance = await Attendance.findOne({
+          employeeId: shift.employeeId,
+          date: currentDate,
+          shiftName: shift.shiftName,
+        });
+
+        // Proceed only if attendance exists and Check-Out has not been marked
+        if (attendance && !attendance.checkOutTime) {
+          const checkInTime = new Date(attendance.checkInTime); // Get Check-In time
+          const totalMillisecondsWorked = shiftEndTime - checkInTime; // Calculate worked time in milliseconds
+          const shiftMilliseconds = shiftEndTime - shiftStartTime; // Calculate shift duration in milliseconds
+
+          // Calculate overtime and undertime in numeric hours
+          const overtime = totalMillisecondsWorked > shiftMilliseconds
+            ? (totalMillisecondsWorked - shiftMilliseconds) / (1000 * 60 * 60) // Convert to hours
+            : 0;
+          const underTime = totalMillisecondsWorked < shiftMilliseconds
+            ? (shiftMilliseconds - totalMillisecondsWorked) / (1000 * 60 * 60) // Convert to hours
+            : 0;
+
+          // Format values into hh:mm:ss for saving
+          attendance.hoursWorked = formatTime(totalMillisecondsWorked); // Worked hours in hh:mm:ss
+          attendance.overtimeHours = formatTime(overtime * 60 * 60 * 1000); // Overtime in hh:mm:ss
+          attendance.underTimeHours = formatTime(underTime * 60 * 60 * 1000); // Undertime in hh:mm:ss
+          attendance.checkOutTime = shiftEndTime; // Mark the shift end time as Check-Out time
+          attendance.status = totalMillisecondsWorked >= shiftMilliseconds ? 'P' : 'U'; // Mark status
+
+          await attendance.save(); // Save updated attendance
+          console.log(`Auto-checkout marked successfully for employeeId: ${shift.employeeId}`);
+        }
+      }
+    }
+  } catch (error) {
+    console.error('Error in auto-checkout logic:', error);
+  }
+};
+
+// Schedule auto-checkout job to run every minute
+cron.schedule('* * * * *', autoCheckoutForShifts);
+router.post('/getCurrentShiftStatus', async (req, res) => {
+  const { employeeId, timestamp } = req.body;
+
+  try {
+    const now = new Date(timestamp || Date.now()); // Current time
+    const currentDate = now.toDateString();
+
+    // Fetch all assigned shifts for the employee
+    const shifts = await ShiftAssignment.find({ employeeId });
+
+    if (!shifts.length) {
+      return res.status(404).json({ error: 'No shifts assigned to this employee.' });
+    }
+
+    // Find the current shift based on time
+    const currentShift = shifts.find((shift) => {
+      const shiftStartTime = new Date(`${currentDate} ${shift.shiftStart}`);
+      const shiftEndTime = new Date(`${currentDate} ${shift.shiftEnd}`);
+      return now >= shiftStartTime && now <= shiftEndTime;
+    });
+
+    // Check if a valid shift is ongoing
+    if (currentShift) {
+      // Check attendance status for the shift
+      const attendance = await Attendance.findOne({
+        employeeId,
+        date: currentDate,
+        shiftId: currentShift.shiftId,
+      });
+
+      const status = attendance?.checkInTime && !attendance.checkOutTime ? 'Checked-In' : 'Not Checked-In';
+
+      return res.json({
+        message: 'Current shift found.',
+        currentShift: {
+          shiftName: currentShift.shiftName,
+          shiftStart: currentShift.shiftStart,
+          shiftEnd: currentShift.shiftEnd,
+          status,
+        },
+      });
+    }
+
+    // Find the next shift (if current time is after the last shift end)
+    const nextShift = shifts.find((shift) => {
+      const shiftStartTime = new Date(`${currentDate} ${shift.shiftStart}`);
+      return now < shiftStartTime;
+    });
+
+    if (nextShift) {
+      return res.json({
+        message: 'Next shift found.',
+        nextShift: {
+          shiftName: nextShift.shiftName,
+          shiftStart: nextShift.shiftStart,
+          shiftEnd: nextShift.shiftEnd,
+          status: 'Not Checked-In', // Default status for next shift
+        },
+      });
+    }
+
+    return res.status(404).json({ error: 'No ongoing or upcoming shifts found.' });
+  } catch (error) {
+    console.error('Error fetching current shift status:', error);
+    res.status(500).json({ error: 'Error fetching current shift status' });
   }
 });
 router.post('/verifyFace', async (req, res) => {
@@ -483,16 +586,16 @@ loadModels()
 //     } else if (type === 'Check-Out') {
 
 //       const checkInTime = new Date(attendance.checkInTime);
-//       const totalHoursWorked = (now - checkInTime) / (1000 * 60 * 60);
+//       const formattedHoursWorked = (now - checkInTime) / (1000 * 60 * 60);
 //       const shiftHours = shift.duration || 8;
-//       const overtime = totalHoursWorked > shiftHours ? totalHoursWorked - shiftHours : 0;
-//       const underTime = totalHoursWorked < shiftHours ? shiftHours - totalHoursWorked : 0;
+//       const overtime = formattedHoursWorked > shiftHours ? formattedHoursWorked - shiftHours : 0;
+//       const underTime = formattedHoursWorked < shiftHours ? shiftHours - formattedHoursWorked : 0;
 
 //       attendance.checkOutTime = now;
-//       attendance.hoursWorked = totalHoursWorked;
+//       attendance.hoursWorked = formattedHoursWorked;
 //       attendance.overtimeHours = overtime;
 //       attendance.underTimeHours = underTime;
-//       attendance.status = totalHoursWorked >= shiftHours ? 'P' : 'U';
+//       attendance.status = formattedHoursWorked >= shiftHours ? 'P' : 'U';
 
 //       await attendance.save();
 //       console.log('Check-Out successful:', attendance);
@@ -681,44 +784,120 @@ cron.schedule('0 0 * * *', async () => { // Changed to run at midnight every day
   await markAbsent();
 });
 
-
 router.get('/attendance', protect, async (req, res) => {
   try {
-    // Ensure the employee ID is present
-    const employeeId = req.user.employeeId;  // Assuming req.user.id is the employeeId
-
+    const employeeId = req.user.employeeId;
     if (!employeeId) {
       return res.status(400).json({ success: false, message: 'Employee ID not found in the request' });
     }
 
-    // Get the current date
-    const currentDate = new Date().toDateString(); // e.g., "Sat Nov 30 2024"
-    
-    // Query attendance records for today
-    const query = { employeeId, date: currentDate };
-    const attendances = await Attendance.find(query);
+    const currentDate = new Date().toDateString(); // Fri Jan 10 2025
+    const currentTime = new Date(); // Current time
+    console.log('Current Date:', currentDate);
+    console.log('Current Time:', currentTime);
 
-    // Check if any attendance records were found
+    // Fetch today's attendance records
+    const attendances = await Attendance.find({
+      employeeId,
+      date: currentDate,
+      checkOutTime: { $exists: false }, // Filter for active shifts only
+    }).lean();
+
+    console.log('Attendance Records:', attendances);
+
     if (!attendances.length) {
-      return res.json({ success: true, data: [], message: 'No attendance records found for today' });
+      return res.json({ success: true, data: [], message: 'No active attendance records for today.' });
+    }
+
+    // Fetch all shift assignments for the employee
+    const shiftAssignments = await ShiftAssignment.find({ employeeId }).lean();
+    console.log('Shift Assignments:', shiftAssignments);
+
+    if (!shiftAssignments.length) {
+      return res.status(404).json({ success: false, message: 'No shift assignments found for this employee.' });
+    }
+
+    // Map attendance records to their corresponding shifts
+    const activeShifts = attendances
+      .map((attendance) => {
+        const shift = shiftAssignments.find(
+          (shift) => shift.shiftId.toString() === attendance.shiftId.toString() // Match shiftId as strings
+        );
+
+        if (shift) {
+          // Combine currentDate with shiftEnd to create a full Date object for comparison
+          const shiftEndDate = new Date(`${currentDate} ${shift.shiftEnd}`); // "Fri Jan 10 2025 2:00 PM"
+          console.log('Shift End Date:', shiftEndDate);
+          
+          // Check if the current time is before the shiftEnd time
+          if (currentTime < shiftEndDate) {
+            return {
+              ...attendance,
+              shiftName: shift.shiftName,
+              shiftStart: shift.shiftStart,
+              shiftEnd: shift.shiftEnd,
+            };
+          }
+        }
+        return null;
+      })
+      .filter(Boolean); // Remove null values (i.e., inactive shifts)
+
+    console.log('Active Shifts:', activeShifts);
+
+    if (!activeShifts.length) {
+      return res.json({ success: true, data: [], message: 'No active attendance records for the remaining shifts.' });
     }
 
     // Format the attendance data
-    const formattedAttendances = attendances.map((attendance) => ({
+    const formattedAttendances = activeShifts.map((attendance) => ({
       date: attendance.date,
-      checkInTime: attendance.checkInTime ? new Date(attendance.checkInTime).toLocaleTimeString('en-US') : '-',
-      checkOutTime: attendance.checkOutTime ? new Date(attendance.checkOutTime).toLocaleTimeString('en-US') : '-',
-      status: attendance.checkInTime ? (attendance.checkOutTime ? 'Present' : 'Checked-In') : 'Absent',
+      shiftName: attendance.shiftName,
+      shiftStart: attendance.shiftStart,
+      shiftEnd: attendance.shiftEnd,
+      checkInTime: attendance.checkInTime
+        ? new Date(attendance.checkInTime).toLocaleTimeString('en-US')
+        : '-',
+      checkOutTime: attendance.checkOutTime
+        ? new Date(attendance.checkOutTime).toLocaleTimeString('en-US')
+        : '-',
+      status: attendance.checkInTime
+        ? attendance.checkOutTime
+          ? 'Present'
+          : 'Checked-In'
+        : 'Absent',
       hoursWorked: attendance.hoursWorked || 0,
+      overtimeHours: attendance.overtimeHours || 0,
+      underTimeHours: attendance.underTimeHours || 0,
     }));
 
-    // Return the formatted attendance data
+    console.log('Formatted Attendances:', formattedAttendances);
     res.json({ success: true, data: formattedAttendances });
   } catch (error) {
     console.error('Error fetching attendance:', error);
     res.status(500).json({ success: false, message: 'Error fetching attendance data' });
   }
 });
+
+
+
+router.get('/salary/attendance', async (req, res) => {
+  try {
+    const { employeeId } = req.query;
+    if (!employeeId) {
+      return res.status(400).json({ message: 'employeeId is required' });
+    }
+    const attendanceRecords = await Attendance.find({ employeeId });
+    if (!attendanceRecords.length) {
+      return res.status(404).json({ message: 'No attendance records found' });
+    }
+    res.status(200).json(attendanceRecords);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
 router.get('/weekly-attendance',protect, async (req, res) => {
   try {
     const employeeId = req.user.employeeId; // Expect employeeId as a query parameter
@@ -750,8 +929,6 @@ router.get('/monthly-attendance', protect, async (req, res) => {
     const startOfMonth = new Date(`${year}-${monthNumber}-01T00:00:00.000Z`);
     const endOfMonth = new Date(year, monthNumber, 0, 23, 59, 59, 999);
 
-   
-
     // Fetch all attendance records for the logged-in employee
     const attendanceData = await Attendance.find({ employeeId }).lean();
 
@@ -761,18 +938,26 @@ router.get('/monthly-attendance', protect, async (req, res) => {
       return recordDate >= startOfMonth && recordDate <= endOfMonth;
     });
 
-    
-
     if (filteredData.length === 0) {
       return res.status(404).json({ message: 'No attendance data for the selected month.' });
     }
 
-    res.json(filteredData);
+    // Convert each record's date to ISO string format before sending the response
+    const responseData = filteredData.map(record => ({
+      ...record,
+      date: new Date(record.date).toISOString(), // Convert date to ISO string
+    }));
+
+    // Send the processed data
+    res.json(responseData);
+    console.log(responseData);
+
   } catch (error) {
     console.error('Error fetching attendance:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
+
 router.get('/attendance/report', async (req, res) => {
   try {
     const { date } = req.query;
