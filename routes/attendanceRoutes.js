@@ -806,7 +806,7 @@ router.get('/attendance', protect, async (req, res) => {
       checkOutTime: { $exists: false }, // Filter for active shifts only
     }).lean();
 
-    console.log('Attendance Records:', attendances);
+   
 
     if (!attendances.length) {
       return res.json({ success: true, data: [], message: 'No active attendance records for today.' });
@@ -814,7 +814,7 @@ router.get('/attendance', protect, async (req, res) => {
 
     // Fetch all shift assignments for the employee
     const shiftAssignments = await ShiftAssignment.find({ employeeId }).lean();
-    console.log('Shift Assignments:', shiftAssignments);
+    
 
     if (!shiftAssignments.length) {
       return res.status(404).json({ success: false, message: 'No shift assignments found for this employee.' });
@@ -830,7 +830,7 @@ router.get('/attendance', protect, async (req, res) => {
         if (shift) {
           // Combine currentDate with shiftEnd to create a full Date object for comparison
           const shiftEndDate = new Date(`${currentDate} ${shift.shiftEnd}`); // "Fri Jan 10 2025 2:00 PM"
-          console.log('Shift End Date:', shiftEndDate);
+         
           
           // Check if the current time is before the shiftEnd time
           if (currentTime < shiftEndDate) {
@@ -846,7 +846,7 @@ router.get('/attendance', protect, async (req, res) => {
       })
       .filter(Boolean); // Remove null values (i.e., inactive shifts)
 
-    console.log('Active Shifts:', activeShifts);
+    
 
     if (!activeShifts.length) {
       return res.json({ success: true, data: [], message: 'No active attendance records for the remaining shifts.' });
@@ -874,7 +874,7 @@ router.get('/attendance', protect, async (req, res) => {
       underTimeHours: attendance.underTimeHours || 0,
     }));
 
-    console.log('Formatted Attendances:', formattedAttendances);
+    
     res.json({ success: true, data: formattedAttendances });
   } catch (error) {
     console.error('Error fetching attendance:', error);
