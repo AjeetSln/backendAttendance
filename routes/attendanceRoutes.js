@@ -10,6 +10,7 @@ const OfficeLocation = require('../models/officeLoc');
 const AssignedOffice = require('../models/AssignedOffice')
 const { protect, admin } = require('../Middleware/authMiddleware');
 const cron = require('node-cron');
+const axiosRetry = require('axios-retry').default;
 const { Canvas, Image, ImageData } = canvas;
 faceapi.env.monkeyPatch({ Canvas, Image, ImageData });
 
@@ -17,6 +18,7 @@ const router = express.Router();
 
 let modelsLoaded = false;
 let cachedProfileDescriptor = null;
+
 
 async function loadModels() {
   if (!modelsLoaded) {
@@ -52,7 +54,7 @@ async function bufferToCanvas(buffer) {
 
 async function getProfileDescriptor(profilePicUrl) {
   if (!cachedProfileDescriptor) {
-    const profilePicResponse = await axios.get(profilePicUrl, { responseType: 'arraybuffer', timeout: 5000 });
+    const profilePicResponse = await axios.get(profilePicUrl, { responseType: 'arraybuffer', timeout: 10000 });
     const profilePicCanvas = await bufferToCanvas(profilePicResponse.data);
 
     const profilePicResults = await faceapi
@@ -66,11 +68,12 @@ async function getProfileDescriptor(profilePicUrl) {
   }
   return cachedProfileDescriptor;
 }
+axiosRetry(axios, { retries: 3, retryDelay: axiosRetry.exponentialDelay });
 
 async function compareFaces(profilePicUrl, capturedImageUrl) {
   try {
     const [capturedImageResponse] = await Promise.all([
-      axios.get(capturedImageUrl, { responseType: 'arraybuffer', timeout: 5000 })
+      axios.get(capturedImageUrl, { responseType: 'arraybuffer', timeout: 10000 })
     ]);
 
     const capturedImageCanvas = await bufferToCanvas(capturedImageResponse.data);
@@ -208,7 +211,7 @@ router.get('/officeLocations', async (req, res) => {
 router.post('/markAttendance', async (req, res) => {
   let { employeeId, location, timestamp, type, shiftName,shiftId } = req.body;
 
-  console.log('Request Body:', req.body);
+  // console.log('Request Body:', req.body);
 
   // Validate location data
   if (!location || typeof location.latitude !== 'number' || typeof location.longitude !== 'number') {
@@ -688,81 +691,81 @@ loadModels()
 // });
 
 
-const markAbsent = async () => {
-  try {
-    const today = new Date().toDateString(); // Get today's date
-    const employees = await User.find({}); // Fetch all employees
+// const markAbsent = async () => {
+//   try {
+//     const today = new Date().toDateString(); // Get today's date
+//     const employees = await User.find({}); // Fetch all employees
 
-    for (const employee of employees) {
-      const shifts = employee.shifts || []; // Assuming `shifts` contains assigned shifts for the employee
+//     for (const employee of employees) {
+//       const shifts = employee.shifts || []; // Assuming `shifts` contains assigned shifts for the employee
 
-      for (const shift of shifts) {
-        const shiftStartTime = new Date();
-        const shiftEndTime = new Date();
+//       for (const shift of shifts) {
+//         const shiftStartTime = new Date();
+//         const shiftEndTime = new Date();
 
-        // Parse the shift's start and end time
-        const { hours: startHours, minutes: startMinutes } = parseTimeTo24Hour(shift.startTime);
-        const { hours: endHours, minutes: endMinutes } = parseTimeTo24Hour(shift.endTime);
+//         // Parse the shift's start and end time
+//         const { hours: startHours, minutes: startMinutes } = parseTimeTo24Hour(shift.startTime);
+//         const { hours: endHours, minutes: endMinutes } = parseTimeTo24Hour(shift.endTime);
 
-        shiftStartTime.setHours(startHours, startMinutes, 0, 0);
-        shiftEndTime.setHours(endHours, endMinutes, 0, 0);
+//         shiftStartTime.setHours(startHours, startMinutes, 0, 0);
+//         shiftEndTime.setHours(endHours, endMinutes, 0, 0);
 
-        // Check if attendance record exists for the current date and shift
-        const existingAttendance = await Attendance.findOne({
-          employeeId: employee.employeeId,
-          date: today,
-          shiftName: shift.shiftName,
-        });
+//         // Check if attendance record exists for the current date and shift
+//         const existingAttendance = await Attendance.findOne({
+//           employeeId: employee.employeeId,
+//           date: today,
+//           shiftName: shift.shiftName,
+//         });
 
-        const dayOfWeek = new Date().toLocaleString('en-US', { weekday: 'long' });
+//         const dayOfWeek = new Date().toLocaleString('en-US', { weekday: 'long' });
 
-        // Mark as absent if:
-        // 1. No attendance record exists OR
-        // 2. No valid check-in time OR
-        // 3. The employee's check-in time is outside the shift hours AND
-        // 4. It's not the employee's week-off
-        if (
-          (!existingAttendance ||
-            !existingAttendance.checkInTime ||
-            new Date(existingAttendance.checkInTime) < shiftStartTime ||
-            new Date(existingAttendance.checkInTime) > shiftEndTime) &&
-          (!employee.weekoffSchedule || !employee.weekoffSchedule.includes(dayOfWeek))
-        ) {
-          console.log(`Marking employee ${employee.employeeId} absent for shift ${shift.shiftName}`);
+//         // Mark as absent if:
+//         // 1. No attendance record exists OR
+//         // 2. No valid check-in time OR
+//         // 3. The employee's check-in time is outside the shift hours AND
+//         // 4. It's not the employee's week-off
+//         if (
+//           (!existingAttendance ||
+//             !existingAttendance.checkInTime ||
+//             new Date(existingAttendance.checkInTime) < shiftStartTime ||
+//             new Date(existingAttendance.checkInTime) > shiftEndTime) &&
+//           (!employee.weekoffSchedule || !employee.weekoffSchedule.includes(dayOfWeek))
+//         ) {
+//           console.log(`Marking employee ${employee.employeeId} absent for shift ${shift.shiftName}`);
 
-          // Create a new attendance record for the absent employee
-          let attendance = await Attendance.findOne({
-            employeeId: employee.employeeId,
-            date: today,
-          });
+//           // Create a new attendance record for the absent employee
+//           let attendance = await Attendance.findOne({
+//             employeeId: employee.employeeId,
+//             date: today,
+//           });
 
-          if (!attendance) {
-            attendance = new Attendance({
-              employeeId: employee.employeeId,
-              name: employee.name,
-              date: today,
-              shiftName: 'N/A', // Assign the shift name
-              location: 'A', // Mark as absent location
-              checkInTime: null, // Set check-in time to null (or '0' if preferred)
-              checkOutTime: null, // Set check-out time to null
-              status: 'A', // 'A' stands for absent
-              hoursWorked: 0, // 0 hours worked
-              overtimeHours: 0, // 0 overtime hours
-              underTimeHours: 0, // 0 undertime hours
-            });
+//           if (!attendance) {
+//             attendance = new Attendance({
+//               employeeId: employee.employeeId,
+//               name: employee.name,
+//               date: today,
+//               shiftName: 'N/A', // Assign the shift name
+//               location: 'A', // Mark as absent location
+//               checkInTime: null, // Set check-in time to null (or '0' if preferred)
+//               checkOutTime: null, // Set check-out time to null
+//               status: 'A', // 'A' stands for absent
+//               hoursWorked: 0, // 0 hours worked
+//               overtimeHours: 0, // 0 overtime hours
+//               underTimeHours: 0, // 0 undertime hours
+//             });
 
-            await attendance.save();
-            console.log(`Attendance marked as absent for employee ${employee.employeeId}`);
-          }
-        }
-      }
-    }
+//             await attendance.save();
+//             console.log(`Attendance marked as absent for employee ${employee.employeeId}`);
+//           }
+//         }
+//       }
+//     }
 
-    console.log('Absent statuses updated for employees with missing or invalid attendance records.');
-  } catch (error) {
-    console.error('Error updating absent statuses:', error);
-  }
-};
+//     console.log('Absent statuses updated for employees with missing or invalid attendance records.');
+//   } catch (error) {
+//     console.error('Error updating absent statuses:', error);
+//   }
+// };
 
 // Utility function to parse time strings into 24-hour format
 function parseTimeTo24Hour(timeString) {
@@ -884,16 +887,24 @@ router.get('/attendance', protect, async (req, res) => {
 router.get('/salary/attendance', async (req, res) => {
   try {
     const { employeeId } = req.query;
+
+    // Check if employeeId is provided
     if (!employeeId) {
       return res.status(400).json({ message: 'employeeId is required' });
     }
+
+    // Fetch attendance records
     const attendanceRecords = await Attendance.find({ employeeId });
-    if (!attendanceRecords.length) {
+
+    // Check if attendance records are empty
+    if (!attendanceRecords || attendanceRecords.length === 0) {
       return res.status(404).json({ message: 'No attendance records found' });
     }
+
+    // Send the attendance records
     res.status(200).json(attendanceRecords);
   } catch (error) {
-    console.error(error);
+    console.error('Error fetching attendance records:', error);
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 });
@@ -982,6 +993,21 @@ router.get('/attendance/report', async (req, res) => {
   } catch (error) {
     console.error('Error fetching attendance records:', error);
     res.status(500).json({ error: 'Internal server error' });
+  }
+});
+router.get('/attendance/all-reports', async (req, res) => {
+  try {
+    // Fetch all attendance records from the database
+    const attendanceRecords = await Attendance.find();
+
+    if (!attendanceRecords.length) {
+      return res.status(404).json({ message: 'No attendance records found' });
+    }
+
+    res.status(200).json(attendanceRecords);
+  } catch (error) {
+    console.error('Error fetching attendance records:', error);
+    res.status(500).json({ message: 'Error fetching attendance records' });
   }
 });
 

@@ -154,17 +154,28 @@ router.get('/salary/employees', async (req, res) => {
     const employees = await User.find({});
     const employeesWithEndDate = employees.map((employee) => {
       const creationDate = new Date(employee.createdAt);
-      const endDateForEmployee = new Date(
+
+      // Calculate monthly cycle end date
+      let currentCycleEndDate = new Date(
         parsedEndDate.getFullYear(),
         parsedEndDate.getMonth(),
         creationDate.getDate()
       );
 
+      // Adjust if end date's day is before creation date's day
+      if (parsedEndDate.getDate() < creationDate.getDate()) {
+        currentCycleEndDate = new Date(
+          parsedEndDate.getFullYear(),
+          parsedEndDate.getMonth() - 1,
+          creationDate.getDate()
+        );
+      }
+
       return {
         employeeId: employee.employeeId,
         name: employee.name,
         profilePic: employee.profilePic || '',
-        endDate: endDateForEmployee.toISOString().split('T')[0],
+        endDate: currentCycleEndDate.toISOString().split('T')[0], // Cycle end date
         createdAt: employee.createdAt,
         salary: parseFloat(employee.salary), // Ensure salary is a number
       };
@@ -176,6 +187,7 @@ router.get('/salary/employees', async (req, res) => {
     return res.status(500).json({ error: 'Internal server error' });
   }
 });
+
 
 router.get('/employees', async (req, res) => {
   const { endDate } = req.query;

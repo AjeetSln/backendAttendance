@@ -5,6 +5,7 @@
     "@vladmandic/face-api": "^1.7.14",
     "aws-sdk": "^2.1692.0",
     "axios": "^1.7.9",
+    "axios-retry": "^4.5.0",
     "bcryptjs": "^2.4.3",
     "body-parser": "^1.20.3",
     "canvas": "^3.0.1",

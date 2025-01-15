@@ -117,7 +117,7 @@ if (cluster.isMaster) {
     });
   });
 
-  server.listen(PORT, () => {
+  server.listen(PORT, '0.0.0.0', () => {
     console.log(`Worker ${process.pid} started on port ${PORT}`);
   });
 }

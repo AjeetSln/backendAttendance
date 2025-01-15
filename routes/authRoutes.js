@@ -296,16 +296,18 @@ router.put('/employees/:id', protect, admin, upload.single('profilePic'), async 
   try {
     const employeeId = req.params.id;
 
+    // Validate employee ID
     if (!mongoose.Types.ObjectId.isValid(employeeId)) {
       return res.status(400).json({ message: 'Invalid employee ID' });
     }
 
+    // Find the employee
     const employee = await User.findById(employeeId);
-
     if (!employee) {
       return res.status(404).json({ message: 'Employee not found' });
     }
 
+    // Extract updated data from request
     const updatedData = {
       name: req.body.name,
       email: req.body.email,
@@ -316,19 +318,23 @@ router.put('/employees/:id', protect, admin, upload.single('profilePic'), async 
       address: req.body.address,
       aadhar: req.body.aadhar,
       salary: req.body.salary,
-      profilePic: req.file?.path || null,
     };
 
-    
+    // Handle profile picture update
+    if (req.file) {
+      updatedData.profilePic = req.file.path; // Use new profile picture path if provided
+    }
 
-    Object.assign(employee, updatedData); // Update employee fields
+    // Update the employee with the new data
+    Object.assign(employee, updatedData);
     await employee.save();
 
-    res.json(employee);
+    res.json({ message: 'Employee updated successfully', employee });
   } catch (error) {
     res.status(500).json({ message: 'Error updating employee', error: error.message });
   }
 });
+
 router.delete('/employees/:employeeId', protect, admin, async (req, res) => {
   try {
     const { employeeId } = req.params; // Get the employeeId from the route parameter
