@@ -46,7 +46,15 @@ app.use(express.json());
 // }));
 
 // Enable Cross-Origin Resource Sharing (CORS)
-app.use(cors({ origin: '*' }));
+app.use(cors({
+  origin: '*',  // Allow all origins, change this to restrict if needed
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],  // Allow specific methods
+  allowedHeaders: ['Content-Type', 'Authorization'],  // Allow specific headers
+  credentials: true,  // Allow cookies if needed
+}));
+
+// Allow CORS preflight requests
+app.options('*', cors()); // Enable CORS preflight for all routes
 
 // Compression middleware for faster responses
 app.use(compression());
@@ -58,15 +66,16 @@ const limiter = rateLimit({
   message: 'Too many requests, please try again later.'
 });
 app.use(limiter);
+
 // Set up the authentication API routes
-app.use('/api2/auth', userRoutes);
-app.use('/api2', markAttendances);
-app.use('/api2/Shift', Shift);
-app.use('/api2', Leave);
-app.use('/api2/email', email);
+app.use('/api/auth', userRoutes);
+app.use('/api', markAttendances);
+app.use('/api/Shift', Shift);
+app.use('/api', Leave);
+app.use('/api/email', email);
 app.use(bodyParser.json()); // for large JSON payloads
 app.use(bodyParser.urlencoded({ extended: true })); // for form data if needed
-app.use('/api2', salaryRoutes);
+app.use('/api', salaryRoutes);
 
 // Timeout handler
 app.use((req, res, next) => {
@@ -121,3 +130,4 @@ if (cluster.isMaster) {
     console.log(`Worker ${process.pid} started on port ${PORT}`);
   });
 }
+
