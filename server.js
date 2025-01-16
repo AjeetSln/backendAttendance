@@ -68,14 +68,14 @@ const limiter = rateLimit({
 app.use(limiter);
 
 // Set up the authentication API routes
-app.use('/api/auth', userRoutes);
-app.use('/api', markAttendances);
-app.use('/api/Shift', Shift);
-app.use('/api', Leave);
-app.use('/api/email', email);
+app.use('/api2/auth', userRoutes);
+app.use('/api2', markAttendances);
+app.use('/api2/Shift', Shift);
+app.use('/api2', Leave);
+app.use('/api2/email', email);
 app.use(bodyParser.json()); // for large JSON payloads
 app.use(bodyParser.urlencoded({ extended: true })); // for form data if needed
-app.use('/api', salaryRoutes);
+app.use('/api2', salaryRoutes);
 
 // Timeout handler
 app.use((req, res, next) => {
